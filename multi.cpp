@@ -6,10 +6,10 @@
 #include <Eigen/Dense>
 
 // define constants
-#define MESH_SIZE 5 // dense matrix class use, mesh size cannot exceed 11
-#define GRID_SIZE (MESH_SIZE+1)
+#define MESH_SIZE 3 // dense matrix class use, mesh size cannot exceed 11
+#define GRID_SIZE (MESH_SIZE+2)
 #define MAT_SIZE (MESH_SIZE*MESH_SIZE)
-#define STEP_SIZE (1.0/GRID_SIZE)
+#define STEP_SIZE (1.0/(GRID_SIZE-1))
 #define SOR_PARAM 1.4
 
 // namespaces
@@ -26,16 +26,18 @@ typedef Matrix<double, 1, Dynamic> V_;
 shared_ptr<double> check(shared_ptr<V> x){
 
     // displaying x in grid
-    shared_ptr<M> Bt(new M), B(new M);
+    shared_ptr<M> Bt(new M), B(new M), U(new M);
+    U->setZero(GRID_SIZE,GRID_SIZE);
     *Bt = Map<M>(x->data(),MESH_SIZE,MESH_SIZE);
     *B = Bt->transpose();
-    //cout << "Values for u are: " << endl << *B << endl << endl;
+    U->block(1,1,MESH_SIZE,MESH_SIZE) = *B;
+//    cout << "Values for u are: " << endl << *U << endl << endl;
 
     // check
-    int c = (int)(MESH_SIZE/2);
-    double calc = ((*B)(c-1,c) + (*B)(c+1,c) +
-                   (*B)(c,c-1) + (*B)(c,c-1)
-                   - 4*(*B)(c,c))/(STEP_SIZE*STEP_SIZE);
+    int c = (int)(GRID_SIZE/2);
+    double calc = ((*U)(c-1,c) + (*U)(c+1,c) +
+                   (*U)(c,c-1) + (*U)(c,c-1)
+                   - 4*(*U)(c,c))/(STEP_SIZE*STEP_SIZE);
     shared_ptr<double> check(new double(calc));
 
     return check;
@@ -78,7 +80,7 @@ void solve(shared_ptr<M> E, shared_ptr<V> y, shared_ptr<V> x, shared_ptr<double>
 
     // SOR method a-go!
     // for each iteration do
-    for(int k=0, i=0; k<500; k++, i=0){
+    for(int k=0, i=0; k<25; k++, i=0){
 
         // k stuff
         // extract part of matrix to multiply with xk
