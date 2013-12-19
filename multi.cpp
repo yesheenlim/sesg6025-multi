@@ -1,17 +1,16 @@
 
 #include <iostream>
-#include <iomanip>
-#include <boost/function.hpp>
+#include <fstream>
 #include <boost/shared_ptr.hpp>
 #include <boost/timer.hpp>
 #include <Eigen/Dense>
-#include <Eigen/LU>
 
 // define constants
-#define MESH_SIZE 7 // set the mesh size here
+#define MESH_SIZE 5 // dense matrix class use, mesh size cannot exceed 11
 #define GRID_SIZE (MESH_SIZE+1)
 #define MAT_SIZE (MESH_SIZE*MESH_SIZE)
 #define STEP_SIZE (1.0/GRID_SIZE)
+#define SOR_PARAM 1.4
 
 // namespaces
 using namespace std;
@@ -19,193 +18,146 @@ using namespace boost;
 using namespace Eigen;
 
 // typedefs
-typedef Matrix<double, MAT_SIZE, MAT_SIZE> M;
-typedef Matrix<double, MESH_SIZE, MESH_SIZE> Msh;
-typedef Matrix<double, MAT_SIZE, 1> V;
-typedef FullPivLU<M> S;
+typedef Matrix<double, Dynamic, Dynamic> M;
+typedef Matrix<double, Dynamic, 1> V;
+typedef Matrix<double, 1, Dynamic> V_;
 
-// function to fill top/bottom right/left of A
-void fill(shared_ptr<M> A){
+// check solution
+shared_ptr<double> check(shared_ptr<V> x){
 
-    // fill interior of A
-    for(int i=1; i<MESH_SIZE-1; i++){
-        for(int j=1; j<MESH_SIZE-1; j++){
-            int north = (i-1)*MESH_SIZE+j;
-            int west = i*MESH_SIZE+j-1;
-            int index = i*MESH_SIZE+j;
-            int east = i*MESH_SIZE+j+1;
-            int south = (i+1)*MESH_SIZE+j;
+    // displaying x in grid
+    shared_ptr<M> Bt(new M), B(new M);
+    *Bt = Map<M>(x->data(),MESH_SIZE,MESH_SIZE);
+    *B = Bt->transpose();
+    //cout << "Values for u are: " << endl << *B << endl << endl;
 
-            (*A)(index,north) = 1;
-            (*A)(index,west) = 1;
-            (*A)(index,index) = -4;
-            (*A)(index,east) = 1;
-            (*A)(index,south) = 1;
+    // check
+    int c = (int)(MESH_SIZE/2);
+    double calc = ((*B)(c-1,c) + (*B)(c+1,c) +
+                   (*B)(c,c-1) + (*B)(c,c-1)
+                   - 4*(*B)(c,c))/(STEP_SIZE*STEP_SIZE);
+    shared_ptr<double> check(new double(calc));
+
+    return check;
+}
+
+// function to build E and y
+void build_DEy(shared_ptr<M> E, shared_ptr<V> y, shared_ptr<V> x){
+
+    // build F
+    int c=MESH_SIZE, d=0;
+    for(int i=0; i<MAT_SIZE-1; i++){
+        if(d!=MESH_SIZE-1){
+            (*E)(i+1,i) = 1;
+            d++;
+        }else{
+            d = 0;
         }
+        if(c<MAT_SIZE)
+            (*E)(c++,i) = 1;
     }
+    //    cout << "E is: " << endl << *E << endl << endl;
 
-    // fill top of A
-    for(int j=1; j<MESH_SIZE-1; j++){
-        int i=0;
-        int west = i*MESH_SIZE+j-1;
-        int index = i*MESH_SIZE+j;
-        int east = i*MESH_SIZE+j+1;
-        int south = (i+1)*MESH_SIZE+j;
+    // build y
+    (*y)((int)(MAT_SIZE/2)) = 2.0*STEP_SIZE*STEP_SIZE;
+    //    cout << "The vector y is:" << endl << *y << endl << endl;
 
-        (*A)(index,west) = 1;
-        (*A)(index,index) = -4;
-        (*A)(index,east) = 1;
-        (*A)(index,south) = 1;
-    }
-
-    // fill left of A
-    for(int i=1; i<MESH_SIZE-1; i++){
-        int j=0;
-        int north = (i-1)*MESH_SIZE+j;
-        int index = i*MESH_SIZE+j;
-        int east = i*MESH_SIZE+j+1;
-        int south = (i+1)*MESH_SIZE+j;
-
-        (*A)(index,north) = 1;
-        (*A)(index,index) = -4;
-        (*A)(index,east) = 1;
-        (*A)(index,south) = 1;
-    }
-
-    // fill right of A
-    for(int i=1; i<MESH_SIZE-1; i++){
-        int j = MESH_SIZE-1;
-        int north = (i-1)*MESH_SIZE+j;
-        int west = i*MESH_SIZE+j-1;
-        int index = i*MESH_SIZE+j;
-        int south = (i+1)*MESH_SIZE+j;
-
-        (*A)(index,north) = 1;
-        (*A)(index,west) = 1;
-        (*A)(index,index) = -4;
-        (*A)(index,south) = 1;
-    }
-
-    // fill bottom of A
-    for(int j=1; j<MESH_SIZE-1; j++){
-        int i = MESH_SIZE-1;
-        int north = (i-1)*MESH_SIZE+j;
-        int west = i*MESH_SIZE+j-1;
-        int index = i*MESH_SIZE+j;
-        int east = i*MESH_SIZE+j+1;
-
-        (*A)(index,north) = 1;
-        (*A)(index,west) = 1;
-        (*A)(index,index) = -4;
-        (*A)(index,east) = 1;
-    }
-
-    int i_, j_, north_, east_, south_, west_, index_;
-
-    // fill top left of A
-    i_=0, j_=0;
-    index_ = i_*MESH_SIZE+j_;
-    east_ = i_*MESH_SIZE+j_+1;
-    south_ = (i_+1)*MESH_SIZE+j_;
-    (*A)(index_,index_) = -4;
-    (*A)(index_,east_) = 1;
-    (*A)(index_,south_) = 1;
-
-    // fill top right of A
-    i_=0, j_=MESH_SIZE-1;
-    west_ = i_*MESH_SIZE+j_-1;
-    index_ = i_*MESH_SIZE+j_;
-    south_ = (i_+1)*MESH_SIZE+j_;
-    (*A)(index_,west_) = 1;
-    (*A)(index_,index_) = -4;
-    (*A)(index_,south_) = 1;
-
-    // fill bottom left of A
-    i_=MESH_SIZE-1, j_=0;
-    north_ = (i_-1)*MESH_SIZE+j_;
-    index_ = i_*MESH_SIZE+j_;
-    east_ = i_*MESH_SIZE+j_+1;
-    (*A)(index_,north_) = 1;
-    (*A)(index_,index_) = -4;
-    (*A)(index_,east_) = 1;
-
-    // fill bottom right of A
-    i_=MESH_SIZE-1, j_=MESH_SIZE-1;
-    north_ = (i_-1)*MESH_SIZE+j_;
-    west_ = i_*MESH_SIZE+j_-1;
-    index_ = i_*MESH_SIZE+j_;
-    (*A)(index_,north_) = 1;
-    (*A)(index_,west_) = 1;
-    (*A)(index_,index_) = -4;
-
-}
-
-// function to build A
-void build_A(shared_ptr<M> A){
-
-    fill(A);
-    cout << "The matrix A is:" << endl << *A << endl << endl;
-}
-
-// function to build y
-void build_y(shared_ptr<V> y){
-
-    (*y)[(int)(MAT_SIZE/2)] = 2.0*STEP_SIZE*STEP_SIZE;
-
-    cout << "The vector y is:" << endl << *y << endl << endl;
-
+    // build x
+    x->setZero();
+    //    cout << "The initalised vector x is:" << endl << *x << endl << endl;
 }
 
 // function to solve y=Ax
-void solve(shared_ptr<M> A, shared_ptr<V> y, shared_ptr<V> x){
+void solve(shared_ptr<M> E, shared_ptr<V> y, shared_ptr<V> x, shared_ptr<double> dc){
 
+    const double w(SOR_PARAM);
+    const int m(MAT_SIZE);
+    shared_ptr<V> exM;
+    shared_ptr<V_> exM_;
+    shared_ptr<V> exV;
 
-    // too store output grid
-    shared_ptr<Msh> Bt(new Msh), B(new Msh);
+    // SOR method a-go!
+    // for each iteration do
+    for(int k=0, i=0; k<500; k++, i=0){
 
-    // use Eigen's LU decomposition solver
-    shared_ptr<S > solver(new S(*A));
+        // k stuff
+        // extract part of matrix to multiply with xk
+        exM.reset(new V);
+        *exM = E->block(i+1,i,m-1-i,1);
+        // extract xk
+        exV.reset(new V);
+        *exV = x->block(i+1,0,m-1-i,1);
+        // compute
+        (*x)(i) = (*x)(i) + w*( ( ((*y)(i) - exM->dot(*exV))/(*dc) ) - (*x)(i) );
 
-    *x = solver->solve(*y);
-    cout << "Solution for x is: " << endl << *x << endl << endl;
+        for(i++; i<m-1; i++){
+            // k+1 stuff
+            // extract part of matrix to multiply with xk+1
+            exM_.reset(new V_);
+            *exM_ = E->block(i,0,1,i);
+            // extract xk+1
+            shared_ptr<V> exV_;
+            exV_.reset(new V);
+            *exV_ = x->block(0,0,i,1);
 
-    // displaying x in grid
-    *Bt = Map<Msh>(x->data(),MESH_SIZE,MESH_SIZE);
-    *B = Bt->transpose();
-    cout << "Values for u are: " << endl << *B << endl << endl;
+            // k stuff
+            // extract part of matrix to multiply with xk
+            exM.reset(new V);
+            *exM = E->block(i+1,i,m-1-i,1);
+            // extract xk
+            exV.reset(new V);
+            *exV = x->block(i+1,0,m-1-i,1);
 
-    int c = (int)(MESH_SIZE/2);
-    double check = ((*B)(c-1,c) + (*B)(c+1,c) +
-                    (*B)(c,c-1) + (*B)(c,c-1)
-                    - 4*(*B)(c,c))/(STEP_SIZE*STEP_SIZE);
-    cout << "Checking: rho(0.5,0.5) = " << check << endl << endl;
+            // compute
+            const double sig = exM->dot(*exV) + exM_->dot(*exV_);
+            (*x)(i) = (*x)(i) + w*( ( ((*y)(i) - sig)/(*dc) ) - (*x)(i) );
+        }
 
+        // k+1 stuff
+        // extract part of matrix to multiply with xk+1
+        exM_.reset(new V_);
+        *exM_ = E->block(i,0,1,i);
+        // extract xk+1
+        exV.reset(new V);
+        *exV = x->block(0,0,i,1);
+        // compute
+        (*x)(i) = (*x)(i) + w*( ( ((*y)(i) - exM_->dot(*exV))/(*dc) ) - (*x)(i) );
+
+    }
+    //    cout << endl << "Ze solution iz: " << endl << *x << endl << endl;
 }
 
+// execute solver
+void execute(){
+    // start timer
+    //    timer t;
+
+    // declare E, y, x
+    shared_ptr<double> dc(new double(-4));
+    shared_ptr<M> E(new M(MAT_SIZE, MAT_SIZE));
+    shared_ptr<V> y(new V(MAT_SIZE,1)), x(new V(MAT_SIZE,1));
+
+    // build F, x, y
+    build_DEy(E,y,x);
+
+    // solve system
+    solve(E,y,x,dc);
+
+    // check solution
+    shared_ptr<double> rho = check(x);
+    cout << endl << "Check: rho(0.5,0.5) is " << *rho << endl << endl;
+
+    // time taken
+    //    cout << endl << "CPU time taken: " << t.elapsed() << endl << endl;
+}
 
 // main
 int main(){
-
-    //start timer
-    timer t;
 
     if(MESH_SIZE%2==0){
         cout << endl << "The mesh size must be an odd number." << endl << endl;
         return 0;
     }
-    //pointer to A and y
-    shared_ptr<M> A(new M);
-    shared_ptr<V> y(new V);
-    shared_ptr<V> x(new V);
 
-    //build A and y
-    build_A(A);
-    build_y(y);
-
-    //solve system
-    solve(A,y,x);
-
-    //time taken
-    cout << "CPU time taken: " << t.elapsed() << endl << endl;
-
+    execute();
 }
